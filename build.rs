@@ -56,7 +56,9 @@ const LIBRARY_CANDIDATES: [&str; 11] = [
 ];
 
 fn main() {
-    if cfg!(feature = "ci-check") {
+    // `dynamic-loading` dlopens libnvidia-encode at runtime, so there's nothing
+    // to link (and no driver lib needed on the builder). `ci-check` likewise.
+    if cfg!(feature = "ci-check") || cfg!(feature = "dynamic-loading") {
         return;
     }
     rerun_if_changed();

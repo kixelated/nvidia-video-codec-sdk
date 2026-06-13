@@ -2,9 +2,11 @@
 
 use core::ffi::{c_int, c_void};
 
+// The two NVENC entry points are linked directly only when not dynamically
+// loading; under `dynamic-loading` they're resolved via dlopen in `EncodeAPI::new`.
+#[cfg(not(feature = "dynamic-loading"))]
+use crate::sys::nvEncodeAPI::{NvEncodeAPICreateInstance, NvEncodeAPIGetMaxSupportedVersion};
 use crate::sys::nvEncodeAPI::{
-    NvEncodeAPICreateInstance,
-    NvEncodeAPIGetMaxSupportedVersion,
     GUID,
     NVENCAPI_MAJOR_VERSION,
     NVENCAPI_MINOR_VERSION,
@@ -232,10 +234,60 @@ impl EncodeAPI {
     fn new() -> Self {
         const MSG: &str = "The API instance should populate the whole function list.";
 
+        // Resolve the two NVENC entry points. Normally they're linked directly;
+        // under `dynamic-loading` we dlopen libnvidia-encode so the binary works
+        // (and can fall back) on machines without the NVIDIA driver, and so a
+        // GPU-less builder needs no driver lib to link against.
+        type GetMaxVersion = unsafe extern "C" fn(*mut u32) -> NVENCSTATUS;
+        type CreateInstance = unsafe extern "C" fn(*mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
+
+        #[cfg(not(feature = "dynamic-loading"))]
+        let (get_max_version, create_instance): (GetMaxVersion, CreateInstance) =
+            (NvEncodeAPIGetMaxSupportedVersion, NvEncodeAPICreateInstance);
+
+        #[cfg(feature = "dynamic-loading")]
+        let (get_max_version, create_instance): (GetMaxVersion, CreateInstance) = {
+            // The NVENC entry points live in the NVIDIA driver library, under
+            // different names per platform. `.so.1` is the versioned SONAME present
+            // at runtime; `.so` is the dev symlink. On Windows the 64-bit name is
+            // preferred, with the legacy name as a fallback.
+            #[cfg(target_os = "linux")]
+            const CANDIDATES: &[&str] = &["libnvidia-encode.so.1", "libnvidia-encode.so"];
+            #[cfg(target_os = "windows")]
+            const CANDIDATES: &[&str] = &["nvEncodeAPI64.dll", "nvEncodeAPI.dll"];
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            const CANDIDATES: &[&str] = {
+                compile_error!("the `dynamic-loading` feature is only supported on Linux and Windows");
+                &[]
+            };
+
+            // SAFETY: loading the NVIDIA driver library runs its initializers,
+            // which is sound here. The handle is leaked to `'static` and never
+            // unloaded, so the resolved function pointers stay valid for the
+            // process lifetime (this is a `'static` lazy static).
+            unsafe {
+                let library = CANDIDATES
+                    .iter()
+                    .find_map(|name| libloading::Library::new(name).ok())
+                    .unwrap_or_else(|| {
+                        panic!("failed to dlopen the NVIDIA encode library (tried {CANDIDATES:?}); is the NVIDIA driver installed?")
+                    });
+                let library: &'static libloading::Library = Box::leak(Box::new(library));
+
+                let get_max: libloading::Symbol<GetMaxVersion> = library
+                    .get(b"NvEncodeAPIGetMaxSupportedVersion\0")
+                    .expect("symbol NvEncodeAPIGetMaxSupportedVersion missing from the NVIDIA encode library");
+                let create: libloading::Symbol<CreateInstance> = library
+                    .get(b"NvEncodeAPICreateInstance\0")
+                    .expect("symbol NvEncodeAPICreateInstance missing from the NVIDIA encode library");
+                (*get_max, *create)
+            }
+        };
+
         // Check that the driver max supported version matches the version
         // from the header files. If they do not match, the bindings should be updated.
         let mut version = 0;
-        unsafe { NvEncodeAPIGetMaxSupportedVersion(&mut version) }
+        unsafe { get_max_version(&mut version) }
             .result_without_string()
             .expect("The pointer to the version should be valid.");
         assert_versions_match(version);
@@ -246,7 +298,7 @@ impl EncodeAPI {
             ..Default::default()
         };
         // Create Encode API Instance (populate function buffer).
-        unsafe { NvEncodeAPICreateInstance(&mut function_list) }
+        unsafe { create_instance(&mut function_list) }
             .result_without_string()
             .expect("The pointer to the function list should be valid.");
 

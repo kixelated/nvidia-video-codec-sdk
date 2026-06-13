@@ -23,6 +23,23 @@ jobs:
       with:
         command: clippy
         args: --features ci-check -- --deny warnings
+  dynamic-loading:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: nightly
+        components: clippy
+        override: true
+    - uses: actions-rs/cargo@v1
+      with:
+        command: clippy
+        # `dynamic-loading` dlopens libnvidia-encode at runtime, so the build needs
+        # no driver lib. `ci-check` pins cudarc's CUDA version so no toolkit is
+        # needed either; `--no-default-features` drops build-system detection.
+        args: --no-default-features --features ci-check,dynamic-loading -- --deny warnings
   fmt:
     runs-on: ubuntu-latest
     steps:

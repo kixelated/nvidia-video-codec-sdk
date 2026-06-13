@@ -18,14 +18,30 @@ cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 features = ["ci-check"]
 
 [dependencies]
-cudarc = { version = "0.19", features = ["cuda-version-from-build-system"] }
+# Only cudarc's `driver` API is used. The CUDA version is selected by a feature:
+# the default `cuda-version-from-build-system` keeps the historical build (detects
+# CUDA from the toolchain). For a build that needs no CUDA toolkit (e.g. with
+# `dynamic-loading`), disable default features and pick a `cudarc/cuda-NNNNN`.
+cudarc = { version = "0.19", default-features = false, features = ["driver"] }
 lazy_static = "1.5.0"
+# Only used by the `dynamic-loading` feature, to dlopen libnvidia-encode. Pinned
+# to 0.8 (not 0.9, which requires rustc 1.88) to respect the crate's MSRV.
+libloading = { version = "0.8", optional = true }
 
 [dev-dependencies]
 vulkano = "0.35.0"
 libc = "0.2"
 
 [features]
-default = []
+default = ["cuda-version-from-build-system"]
+# Detect the installed CUDA version from the build system (the historical
+# default). Disable default features to opt out, e.g. for a toolkit-less build.
+cuda-version-from-build-system = ["cudarc/cuda-version-from-build-system"]
 # workaround to make the ci similar to cudarc
 ci-check = ["cudarc/cuda-12020", "cudarc/dynamic-loading"]
+# Load libnvidia-encode at runtime via dlopen instead of linking it. Lets a
+# binary built without the NVIDIA driver still run (and fall back) on machines
+# that lack it; the build no longer needs the driver lib present either. Only the
+# two NVENC bootstrap symbols are dlopen'd; NVDEC symbols are neither linked nor
+# loaded under this feature.
+dynamic-loading = ["dep:libloading"]
