@@ -415,7 +415,6 @@ impl EncoderInput for Buffer<'_> {
 pub struct BufferLock<'a, 'b> {
     buffer: &'a Buffer<'b>,
     data_ptr: *mut c_void,
-    #[allow(dead_code)]
     pitch: u32,
 }
 
@@ -435,6 +434,44 @@ impl BufferLock<'_, '_> {
         // - Write pitched?
         data.as_ptr()
             .copy_to(self.data_ptr.cast::<u8>(), data.len());
+    }
+
+    /// The row stride (pitch), in bytes, NVENC chose for this input buffer. It
+    /// may exceed the visible width, so a tightly-packed frame must be written
+    /// row by row at this stride (a flat [`write`](Self::write) corrupts the
+    /// image whenever pitch != width). See [`write_rows`](Self::write_rows).
+    #[must_use]
+    pub fn pitch(&self) -> u32 {
+        self.pitch
+    }
+
+    /// Copy `rows` rows of `row_bytes` bytes each from tightly-packed `src` into
+    /// the buffer, starting at byte offset `dst_offset` and placing successive
+    /// rows `dst_stride` bytes apart. This is the pitched write needed for planar
+    /// input (e.g. IYUV) whose plane row stride differs from the visible width.
+    ///
+    /// # Safety
+    ///
+    /// `dst_offset + (rows - 1) * dst_stride + row_bytes` must be within the
+    /// buffer, `src` must hold at least `rows * row_bytes` bytes, and
+    /// `row_bytes <= dst_stride`.
+    pub unsafe fn write_rows(
+        &mut self,
+        dst_offset: usize,
+        dst_stride: usize,
+        src: &[u8],
+        row_bytes: usize,
+        rows: usize,
+    ) {
+        let base = self.data_ptr.cast::<u8>();
+        for row in 0..rows {
+            let src_row = &src[row * row_bytes..row * row_bytes + row_bytes];
+            unsafe {
+                src_row
+                    .as_ptr()
+                    .copy_to_nonoverlapping(base.add(dst_offset + row * dst_stride), row_bytes);
+            }
+        }
     }
 }
 

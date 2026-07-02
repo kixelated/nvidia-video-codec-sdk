@@ -16,6 +16,7 @@ use crate::{
         NV_ENC_CODEC_H264_GUID,
         NV_ENC_CODEC_HEVC_GUID,
         NV_ENC_CODEC_PIC_PARAMS,
+        NV_ENC_PIC_FLAGS,
         NV_ENC_PIC_PARAMS,
         NV_ENC_PIC_PARAMS_AV1,
         NV_ENC_PIC_PARAMS_H264,
@@ -194,6 +195,16 @@ impl Session {
             inputTimeStamp: params.input_timestamp,
             codecPicParams: params.codec_params.map(Into::into).unwrap_or_default(),
             pictureType: params.picture_type,
+            // Force an IDR at this frame regardless of the encoder's own GOP /
+            // picture-type decision. Unlike `pictureType` (honored only when
+            // picture-type decision is disabled), `NV_ENC_PIC_FLAG_FORCEIDR`
+            // applies with it enabled, which is how you request an out-of-cadence
+            // keyframe.
+            encodePicFlags: if params.force_idr {
+                NV_ENC_PIC_FLAGS::NV_ENC_PIC_FLAG_FORCEIDR as u32
+            } else {
+                0
+            },
             ..Default::default()
         };
         unsafe { (ENCODE_API.encode_picture)(self.encoder.ptr, &mut encode_pic_params) }
@@ -237,6 +248,10 @@ pub struct EncodePictureParams {
     /// The picture type to use, if picture type decision is disabled in the
     /// encoder
     pub picture_type: NV_ENC_PIC_TYPE,
+    /// Force this frame to be an IDR (`NV_ENC_PIC_FLAG_FORCEIDR`). Works with
+    /// picture-type decision enabled, so it is the way to request an
+    /// out-of-cadence keyframe.
+    pub force_idr: bool,
     /// Codec-specific parameters
     pub codec_params: Option<CodecPictureParams>,
 }
@@ -246,6 +261,7 @@ impl Default for EncodePictureParams {
         Self {
             input_timestamp: 0,
             picture_type: NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_UNKNOWN,
+            force_idr: false,
             codec_params: None,
         }
     }
